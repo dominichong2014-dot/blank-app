@@ -1,1 +1,3 @@
 streamlit
+alpaca-trade-api
+anthropic
