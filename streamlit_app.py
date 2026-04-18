@@ -4,27 +4,22 @@ import anthropic
 import time
 
 # --- 1. SETUP & SECRETS ---
-# These pull from your Streamlit "Secrets" dashboard
 ALPACA_KEY = st.secrets["ALPACA_KEY"]
 ALPACA_SECRET = st.secrets["ALPACA_SECRET"]
 CLAUDE_KEY = st.secrets["CLAUDE_KEY"]
 
-# Connect to the "Waiters" (APIs)
-# We use the paper-api link for safe practice
 alpaca = tradeapi.REST(ALPACA_KEY, ALPACA_SECRET, "https://paper-api.alpaca.markets", api_version='v2')
 client = anthropic.Anthropic(api_key=CLAUDE_KEY)
 
-# --- 2. THE APP INTERFACE ---
-st.title("🤖 Multi-Stock AI Trader")
-st.write("Invests a set dollar amount into multiple companies based on Claude's advice.")
+# --- 2. APP INTERFACE ---
+st.title("🚀 Auto-Compounding AI Trader")
+st.write("This bot automatically reinvests 100% of your account balance.")
 
-# Settings Sidebar
-st.sidebar.header("Trading Settings")
-watch_list = st.sidebar.text_input("Stocks (comma separated)", "NVDA,AAPL,TSLA,MSFT").split(",")
-invest_amount = st.sidebar.number_input("Dollars per trade ($)", min_value=1.0, value=2.0)
+st.sidebar.header("Bot Control")
+# We list 4 stocks here
+watch_list = ["NVDA", "AAPL", "TSLA", "MSFT"]
 check_interval = st.sidebar.slider("Check every (minutes)", 1, 60, 5)
 
-# Start/Stop Logic
 if "bot_active" not in st.session_state:
     st.session_state.bot_active = False
 
@@ -50,54 +45,45 @@ log_box = st.container()
 
 if st.session_state.bot_active:
     while st.session_state.bot_active:
-        clock = alpaca.get_clock()
-        
-        if not clock.is_open:
+        # Check if market is open
+        if not alpaca.get_clock().is_open:
             status_box.warning("🌙 Market is CLOSED. Waiting...")
             time.sleep(60)
             continue
 
-        status_box.success("✅ Bot is ACTIVE and Scanning...")
+        # --- NEW: CALCULATE BUDGET AUTOMATICALLY ---
+        account = alpaca.get_account()
+        total_cash = float(account.cash) # How much money you have right now
+        num_stocks = len(watch_list)
         
-        # LOOP THROUGH EACH STOCK
+        # Divide your money by 4
+        auto_invest_amount = round(total_cash / num_stocks, 2)
+        
+        status_box.success(f"✅ Active. Budget per stock: ${auto_invest_amount}")
+        
         for ticker in watch_list:
-            ticker = ticker.strip() # Clean up spaces
             try:
-                # Get current price
                 price = float(alpaca.get_latest_trade(ticker).price)
-                
-                # Ask Claude
                 decision = get_claude_advice(ticker, price)
                 
                 log_box.write(f"🔍 {ticker}: ${price} | Claude says: **{decision}**")
 
-                if "BUY" in decision:
+                if "BUY" in decision and auto_invest_amount > 1.0:
                     alpaca.submit_order(
                         symbol=ticker,
-                        notional=invest_amount, # Invests exactly $2.00
+                        notional=auto_invest_amount, 
                         side='buy',
                         type='market',
                         time_in_force='day'
                     )
-                    log_box.success(f"💸 Bought ${invest_amount} of {ticker}")
+                    log_box.success(f"💸 Auto-Bought ${auto_invest_amount} of {ticker}")
 
                 elif "SELL" in decision:
-                    # Only sells if you actually own it
-                    try:
-                        alpaca.submit_order(
-                            symbol=ticker,
-                            notional=invest_amount,
-                            side='sell',
-                            type='market',
-                            time_in_force='day'
-                        )
-                        log_box.error(f"💰 Sold ${invest_amount} of {ticker}")
-                    except:
-                        log_box.info(f"Skipped Sell: No {ticker} shares owned.")
+                    # Logic to sell whatever amount you have
+                    alpaca.close_position(ticker)
+                    log_box.error(f"💰 Sold all {ticker} positions.")
 
             except Exception as e:
                 log_box.error(f"Error with {ticker}: {e}")
 
         time.sleep(check_interval * 60)
-else:
-    status_box.info("😴 Bot is currently IDLE.")
